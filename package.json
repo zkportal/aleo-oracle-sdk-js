@@ -1,0 +1,40 @@
+{
+  "name": "@zkportal/aleo-oracle-sdk",
+  "version": "1.0.0",
+  "description": "Aleo Oracle SDK",
+  "homepage": "https://docs.aleooracle.xyz",
+  "author": {
+    "name": "zkPortal",
+    "url": "https://github.com/zkportal"
+  },
+  "repository": "git+https://github.com/zkportal/aleo-oracle-sdk-js",
+  "bugs": "https://github.com/zkportal/aleo-oracle-sdk-js/issues",
+  "license": "GPL-3.0",
+  "keywords": ["backend", "aleo", "cryptography", "blockchain", "decentralized", "zero-knowledge", "oracle"],
+  "engines": {
+    "node": ">=18"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "README.md",
+    "LICENSE.md",
+    "dist/*",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "rimraf dist && rollup -c rollup.config.js"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^6.8.0",
+    "@typescript-eslint/parser": "^6.8.0",
+    "eslint": "^8.56.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-plugin-import": "^2.29.1",
+    "rimraf": "^5.0.5",
+    "rollup": "^3.29.4",
+    "rollup-plugin-typescript2": "^0.36.0",
+    "typescript": "^5.2.2"
+  }
+}
