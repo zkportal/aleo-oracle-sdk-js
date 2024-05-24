@@ -1,20 +1,13 @@
 export type HeaderDict = { [header: string]: string };
 
-export const DEFAULT_NOTARIZATION_HEADERS: HeaderDict = {
-  Accept: '*/*',
-  'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-  'Upgrade-Insecure-Requests': '1',
-  DNT: '1',
-};
-
-type PositionInfo = {
+export type PositionInfo = {
   // Index of the block where the write operation started
   Pos: number;
   // Number of blocks written in the write operation
   Len: number;
 }
 
-type ProofPositionalInfo = {
+export type ProofPositionalInfo = {
   data: PositionInfo;
   timestamp: PositionInfo;
   statusCode: PositionInfo;
@@ -31,7 +24,7 @@ export type OracleData = {
   /**
    * Schnorr signature of a verified Attestation Report
    */
- signature: string;
+  signature: string;
 
   /**
    * Aleo-encoded data, that was used to create hash included in Attestation Report
@@ -82,6 +75,28 @@ type EncodingOptions = {
    * Precision of an Attestaton Data. Mush be equal or bigger than the number of digits after the comma.
    */
   precision?: number;
+}
+
+export type NotarizationOptions = {
+  /**
+   * If multiple attesters are used, the client will check that the attestation data is exactly the same in all attestation responses.
+   */
+  dataShouldMatch: boolean;
+
+  /**
+   * Attestation request timeout, milliseconds.
+   * If not set, the default timeout of fetch API is used, whatever fetch implementation it may be.
+   */
+  timeout?: number;
+
+  /**
+   * If multiple attesters are used this option controls the maximum deviation in milliseconds between attestation timestamps.
+   *
+   * - if set to 0, requires that all attestations are done at the same time (not recommended). Note that the attestation timestamp
+   * is set by the attestation server using server time.
+   * - if `undefined`, no time deviation checks are performed.
+   */
+  maxTimeDeviation?: number;
 }
 
 /**
@@ -227,6 +242,7 @@ export type AttestationErrorResponse = {
   errorMessage: string;
   errorCode: number;
   errorDetails?: string;
+  responseStatusCode?: number;
 };
 
 export type DebugRequestResponse = {
@@ -246,7 +262,7 @@ export type DebugRequestResponse = {
   extractedData: string;
 };
 
-export type sgxInfo = {
+export type SgxInfo = {
   /**
    * Security version of the enclave. For SGX enclaves, this is the ISVSVN value.
    */
@@ -299,6 +315,13 @@ export type sgxInfo = {
   tcbStatus: number;
 }
 
+export type InfoOptions = {
+  /**
+   * Info request timeout, milliseconds. If not set, the default timeout of fetch API is used, whatever fetch implementation it may be.
+   */
+  timeout?: number;
+}
+
 /**
  * Information about TEE Notarization Backend is running in
  */
@@ -316,7 +339,7 @@ export type EnclaveInfo = {
   /**
    * Information about the TEE
    */
-  info: sgxInfo;
+  info: SgxInfo;
 
   /**
    * Public key of the report signing key that was generated in the enclave

@@ -4,6 +4,10 @@
     "es2021": true
   },
   "extends": ["plugin:@typescript-eslint/recommended", "airbnb-base"],
+  "ignorePatterns": [
+    "dist/",
+    "build-dev/"
+  ],
   "overrides": [
     {
       "env": {
@@ -40,6 +44,7 @@
     "import/extensions": ["error", "never"],
     "no-plusplus": ["error", { "allowForLoopAfterthoughts": true }],
     "no-unused-vars": "off",
+    "no-console": "off",
     "@typescript-eslint/no-unused-vars": "error",
     "@typescript-eslint/no-explicit-any": "warn",
     "max-classes-per-file": "off",
@@ -55,6 +60,6 @@
               "requireLast": false
           }
       }
-  ]
+    ]
   }
 }

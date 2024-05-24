@@ -1,5 +1,7 @@
 # Aleo Web Oracle SDK
 
+[![npm version](https://badge.fury.io/js/@zkportal%2Faleo-oracle-sdk.svg)](https://badge.fury.io/js/@zkportal%2Faleo-oracle-sdk)
+
 This repository contains a Node.js client SDK for Aleo Oracle.
 
 For documentation, see [docs.aleooracle.xyz](https://docs.aleooracle.xyz).

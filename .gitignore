@@ -3,4 +3,4 @@ dist/
 
 #dev
 build-dev
-.vscode/
+.vscode
