@@ -9,6 +9,12 @@ export default {
     format: 'es',
     sourcemap: true,
   },
+  external: [
+    'node:dns',
+    'node:http',
+    'node:https',
+    'node:net',
+  ],
   plugins: [
     typescript({
       tsconfig: 'tsconfig.json',

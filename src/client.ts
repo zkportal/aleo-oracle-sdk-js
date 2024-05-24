@@ -1,71 +1,24 @@
-import { DEFAULT_NOTARIZATION_HEADERS } from './types';
 import type {
   ClientConfig,
+  InfoOptions,
   EnclaveInfo,
+  NotarizationOptions,
   AttestationResponse,
   DebugRequestResponse,
-  AttestationErrorResponse,
   AttestationRequest,
-  DebugRequestResponseWithError,
+  CustomBackendConfig,
 } from './types';
 
-import { AttestationError, DebugAttestationError, AttestationIntegrityError } from './errors';
-
-export * from './types';
-
-const DEFAULT_TIMEOUT_MS = 5000;
-
-export const DEFAULT_FETCH_OPTIONS: Pick<RequestInit, 'cache'|'keepalive'|'mode'|'referrer'|'redirect'> = {
-  cache: 'no-store',
-  mode: 'cors',
-  redirect: 'follow',
-  referrer: '',
-  keepalive: false,
-};
-
-export type NotarizationOptions = {
-  /**
-   * If multiple attesters are used, the client will check that the attestation data is exactly the same in all attestation responses.
-   */
-  dataShouldMatch: boolean;
-
-  /**
-   * Attestation request timeout, milliseconds.
-   * If not set, the default timeout of fetch API is used, whatever fetch implementation it may be.
-   */
-  timeout?: number;
-
-  /**
-   * If multiple attesters are used this option controls the maximum deviation in milliseconds between attestation timestamps.
-   *
-   * - if set to 0, requires that all attestations are done at the same time (not recommended). Note that the attestation timestamp
-   * is set by the attestation server using server time.
-   * - if `undefined`, no time deviation checks are performed.
-   */
-  maxTimeDeviation?: number;
-}
-
-export type InfoOptions = {
-  /**
-   * Info request timeout, milliseconds. If not set, the default timeout of fetch API is used, whatever fetch implementation it may be.
-   */
-  timeout?: number;
-}
-
-export const DEFAULT_NOTARIZATION_OPTIONS: NotarizationOptions = {
-  dataShouldMatch: true,
-  timeout: DEFAULT_TIMEOUT_MS,
-  maxTimeDeviation: undefined,
-};
-
-function trimUrl(url: string) {
-  let trimmedUrl = url.trim();
-  if (trimmedUrl.endsWith('/')) {
-    trimmedUrl = trimmedUrl.slice(0, -1);
-  }
-
-  return trimmedUrl;
-}
+import {
+  DEFAULT_FETCH_OPTIONS, DEFAULT_NOTARIZATION_BACKENDS, DEFAULT_NOTARIZATION_OPTIONS, DEFAULT_TIMEOUT_MS,
+  DEFAULT_VERIFICATION_BACKEND, DEFAULT_NOTARIZATION_HEADERS,
+} from './defaults';
+import { AttestationIntegrityError } from './errors';
+import {
+  getFullAddress, getOrResolveFullAddress, trimPath, trimUrl,
+} from './address';
+import { handleAttestationResponse, handleInfoResponse } from './request';
+import fetch, { type Response } from './fetch';
 
 /**
  * @example
@@ -83,14 +36,10 @@ function trimUrl(url: string) {
  *
  * console.log(resp.attestationData); // will print "Google"
  */
-export class OracleClient {
-  #oracleBackends: (string|URL)[];
+export default class OracleClient {
+  #oracleBackends: Required<CustomBackendConfig>[];
 
-  #oracleFetchOptions: RequestInit;
-
-  #verifier: string | URL;
-
-  #verifierFetchOptions: RequestInit;
+  #verifier: Required<CustomBackendConfig>;
 
   private log: (...args: any[]) => void;
 
@@ -101,23 +50,51 @@ export class OracleClient {
       this.log = config?.logger || console.log;
     }
 
-    if (config?.notarizer) {
-      this.log('OracleClient: using custom notarizer -', config.notarizer.url);
-      this.#oracleBackends = [trimUrl(config.notarizer.url)];
-    } else {
-      this.#oracleBackends = [
-        'https://sgx.aleooracle.xyz', // TODO: configure
-      ];
-    }
-    this.#oracleFetchOptions = config?.notarizer?.init || DEFAULT_FETCH_OPTIONS;
+    // we may modify the config, so we create a copy
+    const conf = { ...config };
 
-    if (config?.verifier) {
-      this.log('OracleClient: using custom verifier -', config.verifier.url);
-      this.#verifier = trimUrl(config.verifier.url);
+    // Use the configured notarizer backend, add default fetch options if they are missing.
+    // Use default notarization backends if the configuration is missing.
+    // Note that the configuration allows configuring only one backend, while the SDK supports multiple
+    // notarization backends.
+    if (conf?.notarizer) {
+      conf.notarizer.init = {
+        ...DEFAULT_FETCH_OPTIONS,
+        ...conf.notarizer.init,
+      };
+      conf.notarizer.apiPrefix = conf.notarizer.apiPrefix || '';
+      this.#oracleBackends = [conf.notarizer as Required<CustomBackendConfig>];
     } else {
-      this.#verifier = 'https://verifier.aleooracle.xyz'; // TODO: configure
+      this.#oracleBackends = DEFAULT_NOTARIZATION_BACKENDS as Required<CustomBackendConfig>[];
     }
-    this.#verifierFetchOptions = config?.verifier?.init || DEFAULT_FETCH_OPTIONS;
+
+    // sanitize oracle backend configs
+    this.#oracleBackends = this.#oracleBackends.map((backend: Required<CustomBackendConfig>) => {
+      const sanitizedConf = { ...backend };
+      sanitizedConf.address = trimUrl(backend.address);
+      sanitizedConf.apiPrefix = trimPath(backend.apiPrefix || '');
+      return sanitizedConf;
+    });
+    this.log('OracleClient: using notarizers:', this.#oracleBackends.map((backend) => getFullAddress(backend).host).join(', '));
+
+    // Use the configured verification backend, add default fetch options if they are missing.
+    // Use default verification backend if the configuration is missing.
+    if (conf?.verifier) {
+      conf.verifier.init = {
+        ...DEFAULT_FETCH_OPTIONS,
+        ...conf.verifier.init,
+      };
+      conf.verifier.apiPrefix = conf.verifier.apiPrefix || '';
+      this.#verifier = conf.verifier as Required<CustomBackendConfig>;
+    } else {
+      this.#verifier = DEFAULT_VERIFICATION_BACKEND as Required<CustomBackendConfig>;
+    }
+
+    // sanitize verification backend config
+    this.#verifier.address = trimUrl(this.#verifier.address);
+    this.#verifier.apiPrefix = trimPath(this.#verifier.apiPrefix || '');
+
+    this.log('OracleClient: using verifier:', getFullAddress(this.#verifier).host);
   }
 
   /**
@@ -173,7 +150,7 @@ export class OracleClient {
       }
     }
 
-    const isValid = await this.verifyReports(attestations);
+    const isValid = await this.verifyReports(attestations, options.timeout || DEFAULT_TIMEOUT_MS);
     if (!isValid) {
       throw new AttestationIntegrityError('failed to verify reports');
     }
@@ -196,19 +173,47 @@ export class OracleClient {
    * @throws {AttestationError | Error}
    */
   async enclavesInfo(options?: InfoOptions): Promise<EnclaveInfo[]> {
-    const fetchOptions: RequestInit = {
-      ...this.#oracleFetchOptions,
-      method: 'GET',
-    };
+    const API_ENDPOINT = '/info';
+
+    let abortSignal: AbortSignal|undefined;
 
     if (options?.timeout && options?.timeout > 0) {
-      fetchOptions.signal = AbortSignal.timeout(options?.timeout);
+      abortSignal = AbortSignal.timeout(options?.timeout);
     }
 
+    // resolve backends to one or more IPs, then we send the request to all of the resolved IPs
+    // and get the first response - this helps with availability and geographic load balancing.
+    const resolvedBackends = await Promise.all(
+      this.#oracleBackends.map(async (backend) => {
+        const hostsAndUrls = await getOrResolveFullAddress(backend, API_ENDPOINT);
+        return {
+          backend,
+          hostsAndUrls,
+        };
+      }),
+    );
+
     let responses: Response[];
+
     try {
+      // each backend may be resolved to more than one IP, send a request to all of them,
+      // for every backend wait for only one response to arrive.
       responses = await Promise.all(
-        this.#oracleBackends.map((backend) => fetch(`${backend}/info`, fetchOptions)),
+        resolvedBackends.map(async (resolvedBackend) => {
+          const fetchOptions: RequestInit = {
+            ...resolvedBackend.backend.init,
+            signal: abortSignal,
+            method: 'GET',
+            headers: {
+              ...resolvedBackend.backend.init.headers,
+              'Content-Type': 'application/json',
+            },
+          };
+
+          return Promise.any(
+            resolvedBackend.hostsAndUrls.map(({ ip, path }) => fetch(resolvedBackend.backend, ip, path, fetchOptions)),
+          );
+        }),
       );
     } catch (e) {
       this.log('OracleClient: one or more info requests have failed, reason -', e);
@@ -216,29 +221,7 @@ export class OracleClient {
     }
 
     const enclavesInfo = await Promise.all(
-      responses.map(async (resp) => {
-        const oracleBackendURL = new URL(resp.url);
-        let jsonBody;
-        try {
-          jsonBody = await resp.json();
-        } catch (e) {
-          this.log(`OracleClient: failed to parse info response from ${oracleBackendURL.host}, reason - ${e}`);
-          // the response doesn't have a JSON body. This is an error response without an error message
-          throw new Error('requesting info failed', { cause: { host: oracleBackendURL.host, status: resp.statusText } });
-        }
-
-        if (resp.status !== 200) {
-          // general error with a JSON body
-          throw new AttestationError(jsonBody as AttestationErrorResponse);
-        }
-
-        const info: EnclaveInfo = {
-          enclaveUrl: oracleBackendURL.origin,
-          ...jsonBody,
-        };
-
-        return info;
-      }),
+      responses.map((resp) => handleInfoResponse(resp)),
     );
 
     return enclavesInfo;
@@ -247,11 +230,21 @@ export class OracleClient {
   /**
    * @throws {AttestationIntegrityError | Error}
    */
-  private async verifyReports(attestations: AttestationResponse[]): Promise<boolean> {
+  private async verifyReports(attestations: AttestationResponse[], timeout: number): Promise<boolean> {
+    const API_ENDPOINT = '/verify';
+
+    const abortSignal = AbortSignal.timeout(timeout);
+
+    // resolve backends to one or more IPs, then we send the request to all of the resolved IPs
+    // and get the first response - this helps with availability and geographic load balancing.
+    const resolvedUrls = await getOrResolveFullAddress(this.#verifier, API_ENDPOINT);
+
     const fetchOptions: RequestInit = {
-      ...this.#verifierFetchOptions,
+      ...this.#verifier.init,
+      signal: abortSignal,
       method: 'POST',
       headers: {
+        ...this.#verifier.init.headers,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ reports: attestations }),
@@ -259,7 +252,7 @@ export class OracleClient {
 
     let response: Response;
     try {
-      response = await fetch(`${this.#verifier}/verify`, fetchOptions);
+      response = await Promise.any(resolvedUrls.map(({ ip, path }) => fetch(this.#verifier, ip, path, fetchOptions)));
     } catch (e) {
       this.log('OracleClient: verification request have failed, reason -', e);
       throw e;
@@ -271,7 +264,7 @@ export class OracleClient {
 
     let jsonBody;
     try {
-      jsonBody = await response.json() as { success: boolean, errorMessage?: string };
+      jsonBody = await response.json() as { success: boolean; errorMessage?: string };
     } catch (e) {
       this.log(`OracleClient: failed to parse verification response from ${this.#verifier}, reason - ${e}`);
       throw new Error('verification failed', { cause: { host: this.#verifier, status: response.statusText } });
@@ -289,8 +282,10 @@ export class OracleClient {
    */
   private async createAttestation(
     req: AttestationRequest,
-    options: { timeout?: number, debug: boolean } = { timeout: DEFAULT_TIMEOUT_MS, debug: false },
+    options: { timeout?: number; debug: boolean } = { timeout: DEFAULT_TIMEOUT_MS, debug: false },
   ): Promise<AttestationResponse[] | DebugRequestResponse[]> {
+    const API_ENDPOINT = '/notarize';
+
     // construct oracle HTTP request body
     const attestReq: AttestationRequest & { debugRequest: boolean } = {
       ...req,
@@ -301,22 +296,45 @@ export class OracleClient {
       debugRequest: options.debug,
     };
 
-    // construct Fetch API options
-    const fetchOptions: RequestInit = {
-      ...this.#oracleFetchOptions,
-      method: 'POST',
-      body: JSON.stringify(attestReq),
-    };
+    let abortSignal: AbortSignal|undefined;
 
-    // attach abort signal if timeout is enabled
-    if (options.timeout && options.timeout > 0) {
-      fetchOptions.signal = AbortSignal.timeout(options.timeout);
+    if (options?.timeout && options?.timeout > 0) {
+      abortSignal = AbortSignal.timeout(options?.timeout);
     }
+
+    // resolve backends to one or more IPs, then we send the request to all of the resolved IPs
+    // and get the first response - this helps with availability and geographic load balancing.
+    const resolvedBackends = await Promise.all(
+      this.#oracleBackends.map(async (backend) => {
+        const resolvedUrls = await getOrResolveFullAddress(backend, API_ENDPOINT);
+        return {
+          backend,
+          ipAndUrl: resolvedUrls,
+        };
+      }),
+    );
 
     let responses: Response[];
     try {
+      // each backend may be resolved to more than one IP, send a request to all of them,
+      // for every backend wait for only one response to arrive.
       responses = await Promise.all(
-        this.#oracleBackends.map((backend) => fetch(`${backend}/notarize`, fetchOptions)),
+        resolvedBackends.map(async (resolvedBackend) => {
+          const fetchOptions: RequestInit = {
+            ...resolvedBackend.backend.init,
+            method: 'POST',
+            signal: abortSignal,
+            body: JSON.stringify(attestReq),
+            headers: {
+              ...resolvedBackend.backend.init.headers,
+              'Content-Type': 'application/json',
+            },
+          };
+
+          return Promise.any(
+            resolvedBackend.ipAndUrl.map(({ ip, path }) => fetch(resolvedBackend.backend, ip, path, fetchOptions)),
+          );
+        }),
       );
     } catch (e) {
       this.log('OracleClient: one or more attestation requests have failed, reason -', e);
@@ -324,40 +342,7 @@ export class OracleClient {
     }
 
     const attestations = await Promise.all(
-      responses.map(async (resp) => {
-        const oracleBackendURL = new URL(resp.url);
-        let jsonBody;
-        try {
-          jsonBody = await resp.json();
-        } catch (e) {
-          this.log(`OracleClient: failed to parse attestation response from ${oracleBackendURL.host}, reason - ${e}`);
-          // the response doesn't have a JSON body. This is an error response without an error message
-          throw new Error('attestation failed', { cause: { host: oracleBackendURL.host, status: resp.statusText } });
-        }
-
-        if (resp.status !== 200) {
-          // this is an error with a JSON body, can be attestation error or debug request error
-          if (options.debug && jsonBody.responseBody !== undefined) {
-            // user did a debug request, and we got a debug error response, which is indicated by having a responseBody and errorMessage
-            throw new DebugAttestationError(jsonBody as DebugRequestResponseWithError);
-          } else {
-            // general attestation error with a JSON body
-            throw new AttestationError(jsonBody as AttestationErrorResponse);
-          }
-        }
-
-        // the user requested debugging, the request didn't fail, therefore it's a successful debugging request
-        if (options.debug) {
-          return jsonBody as DebugRequestResponse;
-        }
-
-        const attestation: AttestationResponse = {
-          enclaveUrl: oracleBackendURL.origin,
-          ...jsonBody,
-        };
-
-        return attestation;
-      }),
+      responses.map(async (resp) => handleAttestationResponse(options, resp)),
     );
 
     return attestations as (AttestationResponse[] | DebugRequestResponse[]);
