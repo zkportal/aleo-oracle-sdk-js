@@ -41,7 +41,7 @@ export function getFullAddress(info: CustomBackendConfig, path: string = ''): Ho
   };
 }
 
-type IpAndUrl = { ip: string; url: string; path: string };
+export type IpAndUrl = { ip: string; url: string; path: string };
 
 // Builds a URL based on the backend config and the desired resource path. If the address is not an IP, and
 // the backend config enables resolving, then this function tries to resolve the address to an IP, then builds

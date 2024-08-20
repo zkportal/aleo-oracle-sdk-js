@@ -17,7 +17,9 @@ import { AttestationIntegrityError } from './errors';
 import {
   getFullAddress, getOrResolveFullAddress, trimPath, trimUrl,
 } from './address';
-import { handleAttestationResponse, handleInfoResponse } from './request';
+import {
+  handleAttestationResponse, handleInfoResponse, requestBackendMesh, resolveBackends,
+} from './request';
 import fetch, { type Response } from './fetch';
 
 /**
@@ -112,50 +114,7 @@ export default class OracleClient {
     const attestations = await this.createAttestation(req, { timeout: options.timeout, debug: false }) as AttestationResponse[];
     this.log(`OracleClient: attested ${new URL(`https://${req.url}`).host} using ${this.#oracleBackends.length} attesters`);
 
-    const numbAttestations = attestations.length;
-
-    if (numbAttestations === 0 || numbAttestations !== this.#oracleBackends.length) {
-      throw new AttestationIntegrityError(
-        'unexpected number of attestations',
-        { cause: `expected ${this.#oracleBackends.length}, got ${numbAttestations}` },
-      );
-    }
-
-    // do some basic client side validation
-    const firstAttestation = attestations[0];
-    const attestationTimestamps = [attestations[0].timestamp];
-    for (let i = 1; i < numbAttestations; i++) {
-      // data matching is disabled, this check is done first for a possibility of early exit
-      if (options.dataShouldMatch && attestations[i].attestationData !== firstAttestation.attestationData) {
-        throw new AttestationIntegrityError('attestation data mismatch', { cause: attestations.map((at) => at.attestationData) });
-      }
-
-      // save the timestamps to check for deviation of all attestations
-      attestationTimestamps.push(attestations[i].timestamp);
-    }
-
-    if (options.maxTimeDeviation !== undefined) {
-      // warn the user that it's not recommended to have a deviation less than 10ms or more than 10s
-      if (options.maxTimeDeviation < 10 || options.maxTimeDeviation > 10 * 1000) {
-        this.log(`OracleClient: WARNING max time deviation for attestation of ${options.maxTimeDeviation}ms is not recommended`);
-      }
-      // test that all attestations were done within the allowed deviation
-      attestationTimestamps.sort();
-      // the difference between the soonest and latest timestamps shouldn't be more than the configured deviation
-      if (attestationTimestamps[numbAttestations - 1] - attestationTimestamps[0] > options.maxTimeDeviation) {
-        throw new AttestationIntegrityError(
-          'attestation timestamps deviate too much',
-          { cause: { maxTimeDeviation: options.maxTimeDeviation, attestationTimestamps } },
-        );
-      }
-    }
-
-    const isValid = await this.verifyReports(attestations, options.timeout || DEFAULT_TIMEOUT_MS);
-    if (!isValid) {
-      throw new AttestationIntegrityError('failed to verify reports');
-    }
-
-    return attestations;
+    return this.handleAttestations(attestations, options);
   }
 
   /**
@@ -183,38 +142,14 @@ export default class OracleClient {
 
     // resolve backends to one or more IPs, then we send the request to all of the resolved IPs
     // and get the first response - this helps with availability and geographic load balancing.
-    const resolvedBackends = await Promise.all(
-      this.#oracleBackends.map(async (backend) => {
-        const hostsAndUrls = await getOrResolveFullAddress(backend, API_ENDPOINT);
-        return {
-          backend,
-          hostsAndUrls,
-        };
-      }),
-    );
+    const resolvedBackends = await resolveBackends(this.#oracleBackends, API_ENDPOINT);
 
     let responses: Response[];
 
     try {
       // each backend may be resolved to more than one IP, send a request to all of them,
       // for every backend wait for only one response to arrive.
-      responses = await Promise.all(
-        resolvedBackends.map(async (resolvedBackend) => {
-          const fetchOptions: RequestInit = {
-            ...resolvedBackend.backend.init,
-            signal: abortSignal,
-            method: 'GET',
-            headers: {
-              ...resolvedBackend.backend.init.headers,
-              'Content-Type': 'application/json',
-            },
-          };
-
-          return Promise.any(
-            resolvedBackend.hostsAndUrls.map(({ ip, path }) => fetch(resolvedBackend.backend, ip, path, fetchOptions)),
-          );
-        }),
-      );
+      responses = await requestBackendMesh(resolvedBackends, 'GET', undefined, abortSignal);
     } catch (e) {
       this.log('OracleClient: one or more info requests have failed, reason -', e);
       throw e;
@@ -225,6 +160,46 @@ export default class OracleClient {
     );
 
     return enclavesInfo;
+  }
+
+  /**
+   * Requests an attested random number within a [0, max) interval.
+   *
+   * @throws {AttestationError | AttestationIntegrityError | Error}
+   */
+  async getAttestedRandom(max: bigint, options: NotarizationOptions = DEFAULT_NOTARIZATION_OPTIONS): Promise<AttestationResponse[]> {
+    // eslint-disable-next-line no-bitwise
+    if (max <= 1n || max > (2n << 127n)) {
+      throw new Error('invalid upper bound for random');
+    }
+
+    const API_ENDPOINT = '/random';
+
+    let abortSignal: AbortSignal|undefined;
+
+    if (options?.timeout && options?.timeout > 0) {
+      abortSignal = AbortSignal.timeout(options?.timeout);
+    }
+
+    // resolve backends to one or more IPs, then we send the request to all of the resolved IPs
+    // and get the first response - this helps with availability and geographic load balancing.
+    const resolvedBackends = await resolveBackends(this.#oracleBackends, `${API_ENDPOINT}?max=${max.toString(10)}`);
+
+    let responses: Response[];
+    try {
+      // each backend may be resolved to more than one IP, send a request to all of them,
+      // for every backend wait for only one response to arrive.
+      responses = await requestBackendMesh(resolvedBackends, 'GET', undefined, abortSignal);
+    } catch (e) {
+      this.log('OracleClient: one or more attestation requests have failed, reason -', e);
+      throw e;
+    }
+
+    const attestations = await Promise.all(
+      responses.map(async (resp) => handleAttestationResponse({ timeout: options.timeout, debug: false }, resp)),
+    ) as AttestationResponse[];
+
+    return this.handleAttestations(attestations, options);
   }
 
   /**
@@ -302,40 +277,11 @@ export default class OracleClient {
       abortSignal = AbortSignal.timeout(options?.timeout);
     }
 
-    // resolve backends to one or more IPs, then we send the request to all of the resolved IPs
-    // and get the first response - this helps with availability and geographic load balancing.
-    const resolvedBackends = await Promise.all(
-      this.#oracleBackends.map(async (backend) => {
-        const resolvedUrls = await getOrResolveFullAddress(backend, API_ENDPOINT);
-        return {
-          backend,
-          ipAndUrl: resolvedUrls,
-        };
-      }),
-    );
+    const resolvedBackends = await resolveBackends(this.#oracleBackends, API_ENDPOINT);
 
     let responses: Response[];
     try {
-      // each backend may be resolved to more than one IP, send a request to all of them,
-      // for every backend wait for only one response to arrive.
-      responses = await Promise.all(
-        resolvedBackends.map(async (resolvedBackend) => {
-          const fetchOptions: RequestInit = {
-            ...resolvedBackend.backend.init,
-            method: 'POST',
-            signal: abortSignal,
-            body: JSON.stringify(attestReq),
-            headers: {
-              ...resolvedBackend.backend.init.headers,
-              'Content-Type': 'application/json',
-            },
-          };
-
-          return Promise.any(
-            resolvedBackend.ipAndUrl.map(({ ip, path }) => fetch(resolvedBackend.backend, ip, path, fetchOptions)),
-          );
-        }),
-      );
+      responses = await requestBackendMesh(resolvedBackends, 'POST', attestReq, abortSignal);
     } catch (e) {
       this.log('OracleClient: one or more attestation requests have failed, reason -', e);
       throw e;
@@ -346,5 +292,52 @@ export default class OracleClient {
     );
 
     return attestations as (AttestationResponse[] | DebugRequestResponse[]);
+  }
+
+  private async handleAttestations(attestations: AttestationResponse[], options: NotarizationOptions): Promise<AttestationResponse[]> {
+    const numAttestations = attestations.length;
+
+    if (numAttestations === 0 || numAttestations !== this.#oracleBackends.length) {
+      throw new AttestationIntegrityError(
+        'unexpected number of attestations',
+        { cause: `expected ${this.#oracleBackends.length}, got ${numAttestations}` },
+      );
+    }
+
+    // do some basic client side validation
+    const firstAttestation = attestations[0];
+    const attestationTimestamps = [attestations[0].timestamp];
+    for (let i = 1; i < numAttestations; i++) {
+      // data matching is disabled, this check is done first for a possibility of early exit
+      if (options.dataShouldMatch && attestations[i].attestationData !== firstAttestation.attestationData) {
+        throw new AttestationIntegrityError('attestation data mismatch', { cause: attestations.map((at) => at.attestationData) });
+      }
+
+      // save the timestamps to check for deviation of all attestations
+      attestationTimestamps.push(attestations[i].timestamp);
+    }
+
+    if (options.maxTimeDeviation !== undefined) {
+      // warn the user that it's not recommended to have a deviation less than 10ms or more than 10s
+      if (options.maxTimeDeviation < 10 || options.maxTimeDeviation > 10 * 1000) {
+        this.log(`OracleClient: WARNING max time deviation for attestation of ${options.maxTimeDeviation}ms is not recommended`);
+      }
+      // test that all attestations were done within the allowed deviation
+      attestationTimestamps.sort();
+      // the difference between the soonest and latest timestamps shouldn't be more than the configured deviation
+      if (attestationTimestamps[numAttestations - 1] - attestationTimestamps[0] > options.maxTimeDeviation) {
+        throw new AttestationIntegrityError(
+          'attestation timestamps deviate too much',
+          { cause: { maxTimeDeviation: options.maxTimeDeviation, attestationTimestamps } },
+        );
+      }
+    }
+
+    const isValid = await this.verifyReports(attestations, options.timeout || DEFAULT_TIMEOUT_MS);
+    if (!isValid) {
+      throw new AttestationIntegrityError('failed to verify reports');
+    }
+
+    return attestations;
   }
 }
