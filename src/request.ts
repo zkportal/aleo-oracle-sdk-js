@@ -4,12 +4,56 @@ import { AttestationError, DebugAttestationError } from './errors';
 import type {
   AttestationErrorResponse,
   AttestationResponse,
+  CustomBackendConfig,
   DebugRequestResponse,
   DebugRequestResponseWithError,
   EnclaveInfo,
 } from './types';
 
-import type { Response } from './fetch';
+import fetch, { type Response } from './fetch';
+import { getOrResolveFullAddress, type IpAndUrl } from './address';
+
+export type BackendMesh = { backend: Required<CustomBackendConfig>; ipAndUrl: IpAndUrl[] }[];
+
+// Resolves backends to one or more IPs and builds URLs with the IPs and path string.
+export async function resolveBackends(backends: Required<CustomBackendConfig>[], path: string): Promise<BackendMesh> {
+  // resolve backends to one or more IPs, then we send the request to all of the resolved IPs
+  // and get the first response - this helps with availability and geographic load balancing.
+  return Promise.all(
+    backends.map(async (backend) => {
+      const resolvedUrls = await getOrResolveFullAddress(backend, path);
+      return {
+        backend,
+        ipAndUrl: resolvedUrls,
+      };
+    }),
+  );
+}
+
+// Performs a request to the backend mesh prepared by resolveBackends
+// eslint-disable-next-line max-len
+export async function requestBackendMesh(backendMesh: BackendMesh, method: string, body?: object, abortSignal?: AbortSignal): Promise<Response[]> {
+  // each backend may be resolved to more than one IP, send a request to all of them,
+  // for every backend wait for only one response to arrive.
+  return Promise.all(
+    backendMesh.map(async (resolvedBackend) => {
+      const fetchOptions: RequestInit = {
+        ...resolvedBackend.backend.init,
+        method,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: abortSignal,
+        headers: {
+          ...resolvedBackend.backend.init.headers,
+          'Content-Type': 'application/json',
+        },
+      };
+
+      return Promise.any(
+        resolvedBackend.ipAndUrl.map(({ ip, path }) => fetch(resolvedBackend.backend, ip, path, fetchOptions)),
+      );
+    }),
+  );
+}
 
 export async function handleInfoResponse(resp: Response): Promise<EnclaveInfo> {
   const oracleBackendURL = new URL(resp.url);
