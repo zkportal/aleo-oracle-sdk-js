@@ -167,7 +167,10 @@ export default class OracleClient {
    *
    * @throws {AttestationError | AttestationIntegrityError | Error}
    */
-  async getAttestedRandom(max: bigint, options: NotarizationOptions = DEFAULT_NOTARIZATION_OPTIONS): Promise<AttestationResponse[]> {
+  async getAttestedRandom(
+    max: bigint,
+    options: NotarizationOptions = { ...DEFAULT_NOTARIZATION_OPTIONS, dataShouldMatch: false },
+  ): Promise<AttestationResponse[]> {
     // eslint-disable-next-line no-bitwise
     if (max <= 1n || max > (2n << 127n)) {
       throw new Error('invalid upper bound for random');

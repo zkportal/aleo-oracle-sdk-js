@@ -1,16 +1,27 @@
 {
   "name": "@zkportal/aleo-oracle-sdk",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Aleo Oracle SDK",
   "homepage": "https://docs.aleooracle.xyz",
   "author": {
     "name": "zkPortal",
     "url": "https://github.com/zkportal"
   },
-  "repository": "git+https://github.com/zkportal/aleo-oracle-sdk-js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zkportal/aleo-oracle-sdk-js.git"
+  },
   "bugs": "https://github.com/zkportal/aleo-oracle-sdk-js/issues",
   "license": "GPL-3.0",
-  "keywords": ["backend", "aleo", "cryptography", "blockchain", "decentralized", "zero-knowledge", "oracle"],
+  "keywords": [
+    "backend",
+    "aleo",
+    "cryptography",
+    "blockchain",
+    "decentralized",
+    "zero-knowledge",
+    "oracle"
+  ],
   "engines": {
     "node": ">=18"
   },
