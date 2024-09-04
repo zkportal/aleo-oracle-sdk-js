@@ -52,9 +52,15 @@ export type OracleData = {
   encodedRequest: string;
 
   /**
-   * Hash of an `encodedRequest`. Can be used to verify in an aleo program that report was made with correct request.
+   * Poseidon8 hash of an `encodedRequest`. Can be used to verify in an aleo program that the report was made with the correct request.
    */
   requestHash: string;
+
+  /**
+   * Poseidon8 hash of the request hash with the attestation timestamp.
+   * Can be used to verify in an aleo program that the report was made with the correct request.
+   */
+  timestampedRequestHash: string;
 }
 
 type EncodingOptions = {
