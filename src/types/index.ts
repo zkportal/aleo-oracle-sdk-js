@@ -18,6 +18,9 @@ import type {
   PositionInfo,
   ProofPositionalInfo,
   SgxInfo,
+  NitroInfo,
+  NitroDocument,
+  NitroReportExtras,
 } from './attestation';
 
 export type {
@@ -38,4 +41,7 @@ export type {
   PositionInfo,
   ProofPositionalInfo,
   SgxInfo,
+  NitroInfo,
+  NitroDocument,
+  NitroReportExtras,
 };

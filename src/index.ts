@@ -31,6 +31,9 @@ import {
   PositionInfo,
   ProofPositionalInfo,
   SgxInfo,
+  NitroInfo,
+  NitroDocument,
+  NitroReportExtras,
 } from './types';
 
 export {
@@ -62,4 +65,7 @@ export {
   PositionInfo,
   ProofPositionalInfo,
   SgxInfo,
+  NitroInfo,
+  NitroDocument,
+  NitroReportExtras,
 };
