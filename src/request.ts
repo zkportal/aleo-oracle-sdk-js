@@ -31,9 +31,13 @@ export async function resolveBackends(backends: Required<CustomBackendConfig>[],
 }
 
 // Performs a request to the backend mesh prepared by resolveBackends
-// eslint-disable-next-line max-len
-export async function requestBackendMesh(backendMesh: BackendMesh, method: string, body?: object, abortSignal?: AbortSignal): Promise<PromiseSettledResult<Response>[]> {
-  return Promise.allSettled(
+export async function requestBackendMesh(
+  backendMesh: BackendMesh,
+  method: string,
+  body?: object,
+  abortSignal?: AbortSignal,
+): Promise<Response[]> {
+  const settledResult = await Promise.allSettled(
     backendMesh.map(async (resolvedBackend) => {
       const fetchOptions: RequestInit = {
         ...resolvedBackend.backend.init,
@@ -53,6 +57,24 @@ export async function requestBackendMesh(backendMesh: BackendMesh, method: strin
       );
     }),
   );
+
+  const responses: Response[] = [];
+  const errorReasons: PromiseRejectedResult['reason'][] = [];
+
+  settledResult.forEach((result) => {
+    if (result.status === 'rejected') {
+      errorReasons.push(result.reason);
+      return;
+    }
+
+    responses.push(result.value);
+  });
+
+  if (responses.length === 0) {
+    throw new Error(`all backends responded with errors: ${JSON.stringify(errorReasons)}`);
+  }
+
+  return responses;
 }
 
 export async function handleInfoResponse(resp: Response): Promise<EnclaveInfo> {

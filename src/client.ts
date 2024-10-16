@@ -151,7 +151,7 @@ export default class OracleClient {
       // for every backend wait for only one response to arrive.
       responses = await requestBackendMesh(resolvedBackends, 'GET', undefined, abortSignal);
     } catch (e) {
-      this.log('OracleClient: one or more info requests have failed, reason -', e);
+      this.log('OracleClient: all info requests have failed, reason -', e);
       throw e;
     }
 
@@ -188,13 +188,13 @@ export default class OracleClient {
     // and get the first response - this helps with availability and geographic load balancing.
     const resolvedBackends = await resolveBackends(this.#oracleBackends, `${API_ENDPOINT}?max=${max.toString(10)}`);
 
-    let responses: Response[];
+    let responses: Response[] = [];
     try {
       // each backend may be resolved to more than one IP, send a request to all of them,
       // for every backend wait for only one response to arrive.
       responses = await requestBackendMesh(resolvedBackends, 'GET', undefined, abortSignal);
     } catch (e) {
-      this.log('OracleClient: one or more attestation requests have failed, reason -', e);
+      this.log('OracleClient: all attestation requests have failed, reason -', e);
       throw e;
     }
 
@@ -208,7 +208,7 @@ export default class OracleClient {
   /**
    * @throws {AttestationIntegrityError | Error}
    */
-  private async verifyReports(attestations: AttestationResponse[], timeout: number): Promise<boolean> {
+  private async verifyReports(attestations: AttestationResponse[], timeout: number): Promise<AttestationResponse[]> {
     const API_ENDPOINT = '/verify';
 
     const abortSignal = AbortSignal.timeout(timeout);
@@ -242,17 +242,19 @@ export default class OracleClient {
 
     let jsonBody;
     try {
-      jsonBody = await response.json() as { success: boolean; errorMessage?: string };
+      jsonBody = await response.json() as { validReports: number[]; errorMessages?: string[] };
     } catch (e) {
       this.log(`OracleClient: failed to parse verification response from ${this.#verifier}, reason - ${e}`);
       throw new Error('verification failed', { cause: { host: this.#verifier, status: response.statusText } });
     }
 
-    if (!jsonBody.success) {
-      throw new AttestationIntegrityError(`verification failed: ${jsonBody.errorMessage}`);
+    if (jsonBody.validReports.length === 0) {
+      throw new AttestationIntegrityError(`verification failed for all reports: ${jsonBody.errorMessages}`);
     }
 
-    return true;
+    const validAttestations = attestations.filter((_, index) => jsonBody.validReports.includes(index));
+
+    return validAttestations;
   }
 
   /**
@@ -282,24 +284,9 @@ export default class OracleClient {
 
     const resolvedBackends = await resolveBackends(this.#oracleBackends, API_ENDPOINT);
 
-    const responses: Response[] = [];
+    let responses: Response[] = [];
     try {
-      const errorReasons: PromiseRejectedResult['reason'][] = [];
-
-      const settledResult = await requestBackendMesh(resolvedBackends, 'POST', attestReq, abortSignal);
-
-      settledResult.forEach((result) => {
-        if (result.status === 'rejected') {
-          errorReasons.push(result.reason);
-          return;
-        }
-
-        responses.push(result.value);
-      });
-
-      if (responses.length === 0) {
-        throw new Error(`all backends responded with errors: ${JSON.stringify(errorReasons)}`);
-      }
+      responses = await requestBackendMesh(resolvedBackends, 'POST', attestReq, abortSignal);
     } catch (e) {
       this.log('OracleClient: all attestation requests have failed, reason -', e);
       throw e;
@@ -351,11 +338,11 @@ export default class OracleClient {
       }
     }
 
-    const isValid = await this.verifyReports(attestations, options.timeout || DEFAULT_TIMEOUT_MS);
-    if (!isValid) {
+    const validAttestations = await this.verifyReports(attestations, options.timeout || DEFAULT_TIMEOUT_MS);
+    if (validAttestations.length === 0) {
       throw new AttestationIntegrityError('failed to verify reports');
     }
 
-    return attestations;
+    return validAttestations;
   }
 }
