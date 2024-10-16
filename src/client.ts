@@ -282,11 +282,26 @@ export default class OracleClient {
 
     const resolvedBackends = await resolveBackends(this.#oracleBackends, API_ENDPOINT);
 
-    let responses: Response[];
+    const responses: Response[] = [];
     try {
-      responses = await requestBackendMesh(resolvedBackends, 'POST', attestReq, abortSignal);
+      const errorReasons: PromiseRejectedResult['reason'][] = [];
+
+      const settledResult = await requestBackendMesh(resolvedBackends, 'POST', attestReq, abortSignal);
+
+      settledResult.forEach((result) => {
+        if (result.status === 'rejected') {
+          errorReasons.push(result.reason);
+          return;
+        }
+
+        responses.push(result.value);
+      });
+
+      if (responses.length === 0) {
+        throw new Error(`all backends responded with errors: ${JSON.stringify(errorReasons)}`);
+      }
     } catch (e) {
-      this.log('OracleClient: one or more attestation requests have failed, reason -', e);
+      this.log('OracleClient: all attestation requests have failed, reason -', e);
       throw e;
     }
 
