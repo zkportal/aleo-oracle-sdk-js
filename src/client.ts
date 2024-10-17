@@ -155,9 +155,25 @@ export default class OracleClient {
       throw e;
     }
 
-    const enclavesInfo = await Promise.all(
+    const settledResult = await Promise.allSettled(
       responses.map((resp) => handleInfoResponse(resp)),
     );
+
+    const enclavesInfo: EnclaveInfo[] = [];
+    const errors: PromiseRejectedResult['reason'][] = [];
+
+    settledResult.forEach((result) => {
+      if (result.status === 'rejected') {
+        errors.push(result.reason);
+        return;
+      }
+
+      enclavesInfo.push(result.value);
+    });
+
+    if (enclavesInfo.length === 0) {
+      throw new Error(`all info requests have failed: ${JSON.stringify(errors)}`);
+    }
 
     return enclavesInfo;
   }
@@ -198,8 +214,9 @@ export default class OracleClient {
       throw e;
     }
 
-    const attestations = await Promise.all(
-      responses.map(async (resp) => handleAttestationResponse({ timeout: options.timeout, debug: false }, resp)),
+    const attestations = await OracleClient.settleAttestationResponses(
+      { timeout: options.timeout, debug: false },
+      responses,
     ) as AttestationResponse[];
 
     return this.handleAttestations(attestations, options);
@@ -263,7 +280,7 @@ export default class OracleClient {
   private async createAttestation(
     req: AttestationRequest,
     options: { timeout?: number; debug: boolean } = { timeout: DEFAULT_TIMEOUT_MS, debug: false },
-  ): Promise<AttestationResponse[] | DebugRequestResponse[]> {
+  ): Promise<(AttestationResponse | DebugRequestResponse)[]> {
     const API_ENDPOINT = '/notarize';
 
     // construct oracle HTTP request body
@@ -292,17 +309,15 @@ export default class OracleClient {
       throw e;
     }
 
-    const attestations = await Promise.all(
-      responses.map(async (resp) => handleAttestationResponse(options, resp)),
-    );
+    const attestations = await OracleClient.settleAttestationResponses(options, responses);
 
-    return attestations as (AttestationResponse[] | DebugRequestResponse[]);
+    return attestations;
   }
 
   private async handleAttestations(attestations: AttestationResponse[], options: NotarizationOptions): Promise<AttestationResponse[]> {
     const numAttestations = attestations.length;
 
-    if (numAttestations === 0 || numAttestations !== this.#oracleBackends.length) {
+    if (numAttestations === 0 || numAttestations > this.#oracleBackends.length) {
       throw new AttestationIntegrityError(
         'unexpected number of attestations',
         { cause: `expected ${this.#oracleBackends.length}, got ${numAttestations}` },
@@ -344,5 +359,32 @@ export default class OracleClient {
     }
 
     return validAttestations;
+  }
+
+  private static async settleAttestationResponses(
+    options: { timeout?: number; debug: boolean },
+    responses: Response[],
+  ): Promise<(AttestationResponse | DebugRequestResponse)[]> {
+    const settledResult = await Promise.allSettled(
+      responses.map(async (response) => handleAttestationResponse(options, response)),
+    );
+
+    const attestations: (AttestationResponse | DebugRequestResponse)[] = [];
+    const errors: PromiseRejectedResult['reason'][] = [];
+
+    settledResult.forEach((result) => {
+      if (result.status === 'rejected') {
+        errors.push(result.reason);
+        return;
+      }
+
+      attestations.push(result.value);
+    });
+
+    if (attestations.length === 0) {
+      throw new Error(`all attestations failed: ${JSON.stringify(errors)}`);
+    }
+
+    return attestations;
   }
 }
