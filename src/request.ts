@@ -31,11 +31,13 @@ export async function resolveBackends(backends: Required<CustomBackendConfig>[],
 }
 
 // Performs a request to the backend mesh prepared by resolveBackends
-// eslint-disable-next-line max-len
-export async function requestBackendMesh(backendMesh: BackendMesh, method: string, body?: object, abortSignal?: AbortSignal): Promise<Response[]> {
-  // each backend may be resolved to more than one IP, send a request to all of them,
-  // for every backend wait for only one response to arrive.
-  return Promise.all(
+export async function requestBackendMesh(
+  backendMesh: BackendMesh,
+  method: string,
+  body?: object,
+  abortSignal?: AbortSignal,
+): Promise<Response[]> {
+  const settledResult = await Promise.allSettled(
     backendMesh.map(async (resolvedBackend) => {
       const fetchOptions: RequestInit = {
         ...resolvedBackend.backend.init,
@@ -48,11 +50,31 @@ export async function requestBackendMesh(backendMesh: BackendMesh, method: strin
         },
       };
 
+      // each backend may be resolved to more than one IP, send a request to all of them,
+      // for every backend wait for only one response to arrive.
       return Promise.any(
         resolvedBackend.ipAndUrl.map(({ ip, path }) => fetch(resolvedBackend.backend, ip, path, fetchOptions)),
       );
     }),
   );
+
+  const responses: Response[] = [];
+  const errorReasons: PromiseRejectedResult['reason'][] = [];
+
+  settledResult.forEach((result) => {
+    if (result.status === 'rejected') {
+      errorReasons.push(result.reason);
+      return;
+    }
+
+    responses.push(result.value);
+  });
+
+  if (responses.length === 0) {
+    throw new Error(`all backends responded with errors: ${JSON.stringify(errorReasons)}`);
+  }
+
+  return responses;
 }
 
 export async function handleInfoResponse(resp: Response): Promise<EnclaveInfo> {
