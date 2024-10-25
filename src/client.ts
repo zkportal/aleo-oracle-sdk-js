@@ -259,14 +259,14 @@ export default class OracleClient {
 
     let jsonBody;
     try {
-      jsonBody = await response.json() as { validReports: number[]; errorMessages?: string[] };
+      jsonBody = await response.json() as { validReports: number[]; errorMessage?: string };
     } catch (e) {
       this.log(`OracleClient: failed to parse verification response from ${this.#verifier}, reason - ${e}`);
       throw new Error('verification failed', { cause: { host: this.#verifier, status: response.statusText } });
     }
 
     if (jsonBody.validReports.length === 0) {
-      throw new AttestationIntegrityError(`verification failed for all reports: ${jsonBody.errorMessages}`);
+      throw new AttestationIntegrityError(`verification failed for all reports: ${jsonBody.errorMessage}`);
     }
 
     const validAttestations = attestations.filter((_, index) => jsonBody.validReports.includes(index));
