@@ -151,13 +151,29 @@ export default class OracleClient {
       // for every backend wait for only one response to arrive.
       responses = await requestBackendMesh(resolvedBackends, 'GET', undefined, abortSignal);
     } catch (e) {
-      this.log('OracleClient: one or more info requests have failed, reason -', e);
+      this.log('OracleClient: all info requests have failed, reason -', e);
       throw e;
     }
 
-    const enclavesInfo = await Promise.all(
+    const settledResult = await Promise.allSettled(
       responses.map((resp) => handleInfoResponse(resp)),
     );
+
+    const enclavesInfo: EnclaveInfo[] = [];
+    const errors: PromiseRejectedResult['reason'][] = [];
+
+    settledResult.forEach((result) => {
+      if (result.status === 'rejected') {
+        errors.push(result.reason);
+        return;
+      }
+
+      enclavesInfo.push(result.value);
+    });
+
+    if (enclavesInfo.length === 0) {
+      throw new Error(`all info requests have failed: ${JSON.stringify(errors)}`);
+    }
 
     return enclavesInfo;
   }
@@ -188,18 +204,19 @@ export default class OracleClient {
     // and get the first response - this helps with availability and geographic load balancing.
     const resolvedBackends = await resolveBackends(this.#oracleBackends, `${API_ENDPOINT}?max=${max.toString(10)}`);
 
-    let responses: Response[];
+    let responses: Response[] = [];
     try {
       // each backend may be resolved to more than one IP, send a request to all of them,
       // for every backend wait for only one response to arrive.
       responses = await requestBackendMesh(resolvedBackends, 'GET', undefined, abortSignal);
     } catch (e) {
-      this.log('OracleClient: one or more attestation requests have failed, reason -', e);
+      this.log('OracleClient: all attestation requests have failed, reason -', e);
       throw e;
     }
 
-    const attestations = await Promise.all(
-      responses.map(async (resp) => handleAttestationResponse({ timeout: options.timeout, debug: false }, resp)),
+    const attestations = await OracleClient.settleAttestationResponses(
+      { timeout: options.timeout, debug: false },
+      responses,
     ) as AttestationResponse[];
 
     return this.handleAttestations(attestations, options);
@@ -208,7 +225,7 @@ export default class OracleClient {
   /**
    * @throws {AttestationIntegrityError | Error}
    */
-  private async verifyReports(attestations: AttestationResponse[], timeout: number): Promise<boolean> {
+  private async verifyReports(attestations: AttestationResponse[], timeout: number): Promise<AttestationResponse[]> {
     const API_ENDPOINT = '/verify';
 
     const abortSignal = AbortSignal.timeout(timeout);
@@ -242,17 +259,19 @@ export default class OracleClient {
 
     let jsonBody;
     try {
-      jsonBody = await response.json() as { success: boolean; errorMessage?: string };
+      jsonBody = await response.json() as { validReports: number[]; errorMessage?: string };
     } catch (e) {
       this.log(`OracleClient: failed to parse verification response from ${this.#verifier}, reason - ${e}`);
       throw new Error('verification failed', { cause: { host: this.#verifier, status: response.statusText } });
     }
 
-    if (!jsonBody.success) {
-      throw new AttestationIntegrityError(`verification failed: ${jsonBody.errorMessage}`);
+    if (jsonBody.validReports.length === 0) {
+      throw new AttestationIntegrityError(`verification failed for all reports: ${jsonBody.errorMessage}`);
     }
 
-    return true;
+    const validAttestations = attestations.filter((_, index) => jsonBody.validReports.includes(index));
+
+    return validAttestations;
   }
 
   /**
@@ -261,7 +280,7 @@ export default class OracleClient {
   private async createAttestation(
     req: AttestationRequest,
     options: { timeout?: number; debug: boolean } = { timeout: DEFAULT_TIMEOUT_MS, debug: false },
-  ): Promise<AttestationResponse[] | DebugRequestResponse[]> {
+  ): Promise<(AttestationResponse | DebugRequestResponse)[]> {
     const API_ENDPOINT = '/notarize';
 
     // construct oracle HTTP request body
@@ -282,25 +301,23 @@ export default class OracleClient {
 
     const resolvedBackends = await resolveBackends(this.#oracleBackends, API_ENDPOINT);
 
-    let responses: Response[];
+    let responses: Response[] = [];
     try {
       responses = await requestBackendMesh(resolvedBackends, 'POST', attestReq, abortSignal);
     } catch (e) {
-      this.log('OracleClient: one or more attestation requests have failed, reason -', e);
+      this.log('OracleClient: all attestation requests have failed, reason -', e);
       throw e;
     }
 
-    const attestations = await Promise.all(
-      responses.map(async (resp) => handleAttestationResponse(options, resp)),
-    );
+    const attestations = await OracleClient.settleAttestationResponses(options, responses);
 
-    return attestations as (AttestationResponse[] | DebugRequestResponse[]);
+    return attestations;
   }
 
   private async handleAttestations(attestations: AttestationResponse[], options: NotarizationOptions): Promise<AttestationResponse[]> {
     const numAttestations = attestations.length;
 
-    if (numAttestations === 0 || numAttestations !== this.#oracleBackends.length) {
+    if (numAttestations === 0 || numAttestations > this.#oracleBackends.length) {
       throw new AttestationIntegrityError(
         'unexpected number of attestations',
         { cause: `expected ${this.#oracleBackends.length}, got ${numAttestations}` },
@@ -336,9 +353,36 @@ export default class OracleClient {
       }
     }
 
-    const isValid = await this.verifyReports(attestations, options.timeout || DEFAULT_TIMEOUT_MS);
-    if (!isValid) {
+    const validAttestations = await this.verifyReports(attestations, options.timeout || DEFAULT_TIMEOUT_MS);
+    if (validAttestations.length === 0) {
       throw new AttestationIntegrityError('failed to verify reports');
+    }
+
+    return validAttestations;
+  }
+
+  private static async settleAttestationResponses(
+    options: { timeout?: number; debug: boolean },
+    responses: Response[],
+  ): Promise<(AttestationResponse | DebugRequestResponse)[]> {
+    const settledResult = await Promise.allSettled(
+      responses.map(async (response) => handleAttestationResponse(options, response)),
+    );
+
+    const attestations: (AttestationResponse | DebugRequestResponse)[] = [];
+    const errors: PromiseRejectedResult['reason'][] = [];
+
+    settledResult.forEach((result) => {
+      if (result.status === 'rejected') {
+        errors.push(result.reason);
+        return;
+      }
+
+      attestations.push(result.value);
+    });
+
+    if (attestations.length === 0) {
+      throw new Error(`all attestations failed: ${JSON.stringify(errors)}`);
     }
 
     return attestations;
