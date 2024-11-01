@@ -257,9 +257,9 @@ export default class OracleClient {
       throw new AttestationIntegrityError(`verification failed: ${response.statusText}`);
     }
 
-    let jsonBody;
+    let jsonBody: { validReports: number[]; errorMessage?: string };
     try {
-      jsonBody = await response.json() as { validReports: number[]; errorMessage?: string };
+      jsonBody = await response.json();
     } catch (e) {
       this.log(`OracleClient: failed to parse verification response from ${this.#verifier}, reason - ${e}`);
       throw new Error('verification failed', { cause: { host: this.#verifier, status: response.statusText } });
