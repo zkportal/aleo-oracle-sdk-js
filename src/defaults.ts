@@ -32,6 +32,14 @@ export const DEFAULT_NOTARIZATION_BACKENDS: CustomBackendConfig[] = [
     resolve: true,
     init: DEFAULT_FETCH_OPTIONS,
   },
+  {
+    address: 'nitro.aleooracle.xyz',
+    port: 443,
+    https: true,
+    apiPrefix: '',
+    resolve: true,
+    init: DEFAULT_FETCH_OPTIONS,
+  },
 ];
 
 export const DEFAULT_VERIFICATION_BACKEND: CustomBackendConfig = {
