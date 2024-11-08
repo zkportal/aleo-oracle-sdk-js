@@ -219,7 +219,7 @@ export type AttestationResponse = {
   /**
    * Which TEE produced an attestation report.
    */
-  attestationType: 'sgx' | 'nitro';
+  reportType: 'sgx' | 'nitro';
 
   /**
    * Data extracted from the attestation target's response using the provided selector.
