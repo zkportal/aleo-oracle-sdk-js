@@ -1,16 +1,22 @@
 # Changelog
 
+## [2.1.1] - 25.11.2024
+
+### Fixed
+
+- `TypeError` during report verification
+
 ## [2.1.0] - 08.11.2024
 
-## Added
+### Added
 
 - Default Client config now includes AWS Nitro notarizer
 
-## Changed
+### Changed
 
 - Client will no longer report an error if one of multiple attestations has failed verification, the client will return all verified attestations as long as there is at least one
 
-## Fixed
+### Fixed
 
 - `AttestationResponse.attestationType` is renamed to `AttestationResponse.reportType` to align with Go SDK and API
 
