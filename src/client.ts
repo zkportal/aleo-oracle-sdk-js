@@ -265,7 +265,7 @@ export default class OracleClient {
       throw new Error('verification failed', { cause: { host: this.#verifier, status: response.statusText } });
     }
 
-    if (jsonBody.validReports.length === 0) {
+    if (!jsonBody.validReports || jsonBody.validReports.length === 0) {
       throw new AttestationIntegrityError(`verification failed for all reports: ${jsonBody.errorMessage}`);
     }
 
