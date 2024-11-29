@@ -374,7 +374,7 @@ export default class OracleClient {
 
     settledResult.forEach((result) => {
       if (result.status === 'rejected') {
-        errors.push(result.reason);
+        errors.push(JSON.stringify(result.reason, ['message', ...Object.keys(result.reason)]));
         return;
       }
 
@@ -382,7 +382,7 @@ export default class OracleClient {
     });
 
     if (attestations.length === 0) {
-      throw new Error(`all attestations failed: ${JSON.stringify(errors)}`);
+      throw new Error(`all attestations failed, reasons: [${errors}]`);
     }
 
     return attestations;
